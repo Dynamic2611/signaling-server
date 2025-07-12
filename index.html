@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket Video Chat</title>
+</head>
+<body>
+  <input id="yourId" placeholder="Your ID" />
+  <input id="peerId" placeholder="Peer ID" />
+  <button onclick="register()">Register</button>
+  <br/><br/>
+  <label for="chat">Chat Messages:</label>
+  <textarea id="chat" rows="10" cols="40" readonly placeholder="Chat messages will appear here" title="Chat messages"></textarea><br/>
+  <input id="msg" placeholder="Type a message" />
+  <button onclick="sendMessage()">Send</button>
+  <br/><br/>
+  <video id="localVideo" autoplay playsinline webkit-playsinline muted></video>
+  <video id="remoteVideo" autoplay playsinline></video>
+  <br/>
+  <button onclick="startCall()">Start Call</button>
+
+  <script>
+    const socket = new WebSocket('ws://localhost:8080');
+    let localStream, pc;
+    let yourId = '';
+    let peerId = '';
+
+    socket.onmessage = async ({ data }) => {
+      const { type, from, payload } = JSON.parse(data);
+      switch (type) {
+        case 'chat':
+          document.getElementById('chat').value += `\n${from}: ${payload}`;
+          break;
+        case 'offer':
+          await handleOffer(from, payload);
+          break;
+        case 'answer':
+          await pc.setRemoteDescription(new RTCSessionDescription(payload));
+          break;
+        case 'ice':
+          if (payload) pc.addIceCandidate(new RTCIceCandidate(payload));
+          break;
+      }
+    };
+
+    function register() {
+      yourId = document.getElementById('yourId').value;
+      peerId = document.getElementById('peerId').value;
+      socket.send(JSON.stringify({ type: 'register', from: yourId }));
+    }
+
+    function sendMessage() {
+      const text = document.getElementById('msg').value;
+      socket.send(JSON.stringify({ type: 'chat', from: yourId, to: peerId, payload: text }));
+    }
+
+    async function startCall() {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      createPeerConnection();
+
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      socket.send(JSON.stringify({ type: 'offer', from: yourId, to: peerId, payload: offer }));
+    }
+
+    function createPeerConnection() {
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      pc.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+          socket.send(JSON.stringify({ type: 'ice', from: yourId, to: peerId, payload: candidate }));
+        }
+      };
+
+      pc.ontrack = (event) => {
+        document.getElementById('remoteVideo').srcObject = event.streams[0];
+      };
+    }
+
+    async function handleOffer(from, offer) {
+      createPeerConnection();
+
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('localVideo').srcObject = localStream;
+
+      localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, localStream);
+      });
+
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      socket.send(JSON.stringify({ type: 'answer', from: yourId, to: from, payload: answer }));
+    }
+  </script>
+</body>
+</html>
